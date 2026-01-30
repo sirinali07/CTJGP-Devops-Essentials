@@ -31,7 +31,7 @@ wget https://releases.hashicorp.com/terraform/1.12.2/terraform_1.12.2_linux_386.
 ```
 [Click here](https://developer.hashicorp.com/terraform/downloads) for Terraform's Latest Versions
 ```
-unzip terraform_1.9.2_linux_amd64.zip
+unzip terraform_1.12.2_linux_386.zip
 ls
 ```
 ```
