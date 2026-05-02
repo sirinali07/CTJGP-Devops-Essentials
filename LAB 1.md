@@ -299,7 +299,7 @@ Copy and paste the below code and save it.
 ```
 ---
 - name: Install Jenkins (single file - final)
-  hosts: controlplane
+  hosts: sirin-Jenkins-Server
   become: yes
   gather_facts: yes
 
@@ -410,7 +410,7 @@ Copy and paste the below code and save it.
 
 
 - name: Install Docker (single file - final, stable)
-  hosts: node01
+  hosts:  sirin-Docker-Server
   become: yes
   gather_facts: yes
 
