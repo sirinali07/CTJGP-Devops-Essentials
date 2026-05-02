@@ -298,125 +298,210 @@ vi main.yaml
 Copy and paste the below code and save it.
 ```
 ---
-
-- name: Start installing Jenkins pre-requisites before installing Jenkins
-  hosts: sirin-Jenkins-Server
+- name: Install Jenkins (single file - final)
+  hosts: controlplane
   become: yes
-  become_method: sudo
-  gather_facts: no
+  gather_facts: yes
+
+  vars:
+    apt_lock_timeout: 900
+
+    # Jenkins weekly repo + 2026 signing key (post key-rotation) [1](https://bing.com/search?q=Jenkins+minimum+required+Java+version+21+supported+Java+versions+21+25+May+2026)
+    jenkins_repo_url: "https://pkg.jenkins.io/debian"
+    jenkins_key_url: "https://pkg.jenkins.io/debian/jenkins.io-2026.key"
+    jenkins_keyring: "/usr/share/keyrings/jenkins-keyring.asc"
+    jenkins_repo: "deb [signed-by={{ jenkins_keyring }}] {{ jenkins_repo_url }} binary/"
+
+    # Jenkins on your host requires Java 21+ (your journal showed min Java 21) [2](https://www.jenkins.io/blog/2023/03/27/repository-signing-keys-changing/)
+    jenkins_java_pkg: "openjdk-21-jdk"
+    jenkins_java_home: "/usr/lib/jvm/java-21-openjdk-amd64"
+
+  pre_tasks:
+    - name: Wait for apt/dpkg locks to be released
+      ansible.builtin.shell: |
+        set -e
+        timeout {{ apt_lock_timeout }} bash -c '
+          while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
+             || fuser /var/lib/dpkg/lock >/dev/null 2>&1 \
+             || fuser /var/lib/apt/lists/lock >/dev/null 2>&1 \
+             || fuser /var/cache/apt/archives/lock >/dev/null 2>&1; do
+            echo "APT/DPKG locked by another process. Waiting..."
+            sleep 5
+          done
+        '
+      args:
+        executable: /bin/bash
+      changed_when: false
 
   tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
+        lock_timeout: "{{ apt_lock_timeout }}"
 
-  - name: Update apt repository with latest packages
-    apt:
-      update_cache: yes
-      upgrade: yes
+    - name: Install required packages (Java 21 + repo utilities)
+      ansible.builtin.apt:
+        name:
+          - "{{ jenkins_java_pkg }}"
+          - ca-certificates
+          - curl
+          - gnupg
+          - fontconfig
+        state: present
+        update_cache: yes
+        lock_timeout: "{{ apt_lock_timeout }}"
 
-  - name: Installing jdk17 in Jenkins server
-    apt:
-      name: openjdk-17-jdk
-      update_cache: yes
-    become: yes
+    # Cleanup old Jenkins repo/key entries to avoid Signed-By conflicts
+    - name: Remove old Jenkins repo list files (if any)
+      ansible.builtin.shell: rm -f /etc/apt/sources.list.d/jenkins*.list
+      args:
+        executable: /bin/bash
+      changed_when: false
 
-  - name: Installing jenkins apt repository key
-    apt_key:
-      url: https://pkg.jenkins.io/debian/jenkins.io-2023.key
-      state: present
-    become: yes
+    - name: Remove old Jenkins keyring from /etc/apt/keyrings (if any)
+      ansible.builtin.file:
+        path: /etc/apt/keyrings/jenkins-keyring.asc
+        state: absent
 
-  - name: Configuring the apt repository
-    apt_repository:
-      repo: deb https://pkg.jenkins.io/debian binary/
-      filename: /etc/apt/sources.list.d/jenkins.list
-      state: present
-    become: yes
+    - name: Ensure /usr/share/keyrings exists
+      ansible.builtin.file:
+        path: /usr/share/keyrings
+        state: directory
+        mode: "0755"
 
-  - name: Update apt-get repository with "apt-get update"
-    apt:
-      update_cache: yes
+    - name: Download Jenkins signing key (2026)
+      ansible.builtin.get_url:
+        url: "{{ jenkins_key_url }}"
+        dest: "{{ jenkins_keyring }}"
+        mode: "0644"
 
-  - name: Finally, its time to install Jenkins
-    apt: name=jenkins update_cache=yes
-    become: yes
+    - name: Add Jenkins apt repository (signed-by)
+      ansible.builtin.apt_repository:
+        repo: "{{ jenkins_repo }}"
+        filename: jenkins
+        state: present
 
-  - name: Jenkins is installed. Lets start 'Jenkins' now!
-    service: name=jenkins state=started
+    - name: Update apt cache after adding Jenkins repo
+      ansible.builtin.apt:
+        update_cache: yes
+        lock_timeout: "{{ apt_lock_timeout }}"
+
+    - name: Install Jenkins
+      ansible.builtin.apt:
+        name: jenkins
+        state: present
+        lock_timeout: "{{ apt_lock_timeout }}"
+
+    - name: Set JAVA_HOME for Jenkins (Java 21)
+      ansible.builtin.lineinfile:
+        path: /etc/default/jenkins
+        regexp: '^JAVA_HOME='
+        line: "JAVA_HOME={{ jenkins_java_home }}"
+
+    - name: Reload systemd
+      ansible.builtin.command: systemctl daemon-reload
+      changed_when: false
+
+    - name: Enable and restart Jenkins
+      ansible.builtin.service:
+        name: jenkins
+        enabled: yes
+        state: restarted
 
 
-  - name: Wait until the file /var/lib/jenkins/secrets/initialAdminPassword is present before continuing
-    wait_for:
-      path: /var/lib/jenkins/secrets/initialAdminPassword
-  - name: You can find Jenkins admin password under 'debug'
-    command: cat /var/lib/jenkins/secrets/initialAdminPassword
-    register: out
-  - debug: var=out.stdout_lines
-
-
-- name: Start the Docker installation steps
-  hosts: sirin-Docker-Server
+- name: Install Docker (single file - final, stable)
+  hosts: node01
   become: yes
-  become_method: sudo
-  gather_facts: no
+  gather_facts: yes
+
+  vars:
+    apt_lock_timeout: 900
+    docker_keyring: /etc/apt/keyrings/docker.gpg
+    docker_repo: "deb [signed-by={{ docker_keyring }}] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+
+  pre_tasks:
+    - name: Wait for apt/dpkg locks to be released
+      ansible.builtin.shell: |
+        set -e
+        timeout {{ apt_lock_timeout }} bash -c '
+          while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
+             || fuser /var/lib/dpkg/lock >/dev/null 2>&1 \
+             || fuser /var/lib/apt/lists/lock >/dev/null 2>&1 \
+             || fuser /var/cache/apt/archives/lock >/dev/null 2>&1; do
+            echo "APT/DPKG locked by another process. Waiting..."
+            sleep 5
+          done
+        '
+      args:
+        executable: /bin/bash
+      changed_when: false
 
   tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
+        lock_timeout: "{{ apt_lock_timeout }}"
 
-  - name: Update 'apt' repository with latest versions of packages
-    apt:
-      update_cache: yes
+    - name: Install prerequisites
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
+        update_cache: yes
+        lock_timeout: "{{ apt_lock_timeout }}"
 
-  - name: install docker prerequisite packages
-    apt:
-      name: ['ca-certificates', 'curl', 'gnupg', 'lsb-release']
-      update_cache: yes
-      state: latest
+    - name: Ensure /etc/apt/keyrings exists
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
 
-  - name: Install the docker apt repository key
-    apt_key: url=https://download.docker.com/linux/ubuntu/gpg state=present
-    become: yes
+    - name: Download Docker repository key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /tmp/docker.gpg.key
+        mode: "0644"
 
-  - name: Configure the apt repository
-    apt_repository:
-      repo: deb https://download.docker.com/linux/ubuntu bionic stable
-      state: present
-    become: yes
+    - name: Convert Docker key to keyring
+      ansible.builtin.shell: |
+        set -o pipefail
+        cat /tmp/docker.gpg.key | gpg --dearmor -o "{{ docker_keyring }}"
+      args:
+        executable: /bin/bash
 
-  - name: Update 'apt' repository
-    apt:
-      update_cache: yes
+    - name: Set permissions on Docker keyring
+      ansible.builtin.file:
+        path: "{{ docker_keyring }}"
+        mode: "0644"
 
-  - name: Install Docker packages
-    apt:
-      name: ['docker-ce', 'docker-ce-cli', 'containerd.io']
-      update_cache: yes
-    become: yes
+    - name: Add Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: "{{ docker_repo }}"
+        filename: docker
+        state: present
 
-  - name: Install jdk17 in Docker server. Maven needs this.
-    apt:
-      name: openjdk-17-jre-headless
-      update_cache: yes
-    become: yes
+    - name: Update apt cache after adding Docker repo
+      ansible.builtin.apt:
+        update_cache: yes
+        lock_timeout: "{{ apt_lock_timeout }}"
 
-  - name: Start Docker service
-    service:
-      name: docker
-      state: started
-      enabled: yes
+    - name: Install Docker Engine
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+        state: present
+        lock_timeout: "{{ apt_lock_timeout }}"
 
-
-  - lineinfile:
-       dest: /lib/systemd/system/docker.service
-       regexp: '^ExecStart='
-       line: 'ExecStart=/usr/bin/dockerd -H tcp://0.0.0.0:4243 -H unix:///var/run/docker.sock'
-
-
-  - name: Reload systemd
-    command: systemctl daemon-reload
-
-  - name: docker restart
-    service:
-      name: docker
-      state: restarted
-...
+    - name: Enable and start Docker
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: yes
 ```
 Run the above playbook to deploy the packages onto target servers.
 ```
