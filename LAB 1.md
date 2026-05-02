@@ -51,15 +51,9 @@ Install Python 3 and the required packages:
 ```
 sudo apt install python3-pip -y
 ```
-Installing `AWS CLI`
+Installing `AWS CLI`, `boto`, `boto3`, and `ansible`
 ```
-curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-unzip awscliv2.zip
-sudo ./aws/install
-```
-Installing Ansible
-```
-sudo apt install ansible -y
+pip3 install  boto boto3 awscli ansible --break-system-packages
 ```
 For Authentication with AWS we need to provide `IAM User's CLI Credentials`
 ```
