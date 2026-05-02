@@ -53,7 +53,7 @@ sudo apt install python3-pip -y
 ```
 Installing `AWS CLI`, `boto`, `boto3`, and `ansible`
 ```
-pip3 install  boto boto3 awscli ansible --break-system-packages
+sudo pip3 install  boto boto3 awscli ansible --break-system-packages
 ```
 For Authentication with AWS we need to provide `IAM User's CLI Credentials`
 ```
